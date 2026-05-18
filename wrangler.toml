@@ -1,14 +1,11 @@
 # Cloudflare Worker configuration for the Pebble Sports backend.
 #
-# Two things this file does that the README walks you through:
+# Two things this file does:
 #   1. Binds the KV namespace where registered watches + pin snapshots
 #      are stored (replaces the file-based sports-users.json).
 #   2. Sets the Cron Trigger that fires the scheduled() handler every
 #      2 minutes — this is what pushes timeline pins to your watch
 #      without the app being open.
-#
-# Before deploying, edit the KV namespace id on line ~26 to match the
-# id printed by `wrangler kv namespace create SPORTS_KV`.
 
 name = "pebble-sports-worker"
 main = "src/index.ts"
@@ -26,8 +23,6 @@ head_sampling_rate = 1
 crons = ["*/2 * * * *"]
 
 # KV namespace — replaces data/sports-users.json.
-# Run `wrangler kv namespace create SPORTS_KV` to provision and paste
-# the printed id below.
 [[kv_namespaces]]
 binding = "SPORTS_KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "35b8a9af431c46398eab5ed4ba1c9d4b"
