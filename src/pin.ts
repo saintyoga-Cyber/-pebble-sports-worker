@@ -4,6 +4,10 @@
 // the watch app receives byte-for-byte the same pins.
 //
 // Storage is now KV-backed (registry.ts) instead of file-backed.
+//
+// Fix (2026-05): buildSubtitle fallback time display now uses
+// America/New_York (ET) instead of UTC, so pre-game pins show the
+// correct local start time for North American sports.
 
 import type { Env, GameState, NHLGame, NHLTeam, PinSnapshot, UserEntry } from "./types";
 import {
@@ -141,6 +145,25 @@ function teamColor(t: NHLTeam, sport?: string): string {
   return map[abbr] || "white";
 }
 
+// Format the fallback "start time" text in Eastern Time so North
+// American sports fans see the correct local hour (e.g. "6:10 PM")
+// regardless of where the Cloudflare Worker is running.
+function formatStartTimeET(isoString: string, broadcast?: string | null): string {
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
+  let s = `${get("weekday")} ${get("hour")}:${get("minute")} ${get("dayPeriod")}`;
+  if (broadcast) s += ` · ${broadcast.split(",")[0].trim()}`;
+  return s;
+}
+
 function buildSubtitle(game: NHLGame): string {
   switch (game.state) {
     case "final": {
@@ -161,15 +184,10 @@ function buildSubtitle(game: NHLGame): string {
         if (h > 0) return m > 0 ? `Starts in ${h}h ${m}m` : `Starts in ${h}h`;
         return `Starts in ${m}m`;
       }
-      const d = new Date(game.startTime);
-      const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-      const h = d.getHours();
-      const m = d.getMinutes();
-      const ampm = h >= 12 ? "PM" : "AM";
-      const h12 = h % 12 || 12;
-      let s = `${days[d.getDay()]} ${h12}:${m < 10 ? "0" + m : m} ${ampm}`;
-      if (game.broadcast) s += ` · ${game.broadcast.split(",")[0].trim()}`;
-      return s;
+      // Fallback: game time has passed (e.g. pin was created early).
+      // Display start time in ET — not UTC — so North American fans
+      // see the correct hour (fixes the reported timezone bug).
+      return formatStartTimeET(game.startTime, game.broadcast);
     }
     case "in-game": {
       const parts: string[] = [];
@@ -433,8 +451,6 @@ export async function processUserWithGames(
 
   const now = Date.now();
   const currentGameIds = new Set<string>();
-  // Pull all existing snapshot game IDs once so we know which pins
-  // to delete when a game falls out of the user's follow set.
   const existingGameIds = new Set(await listSnapGameIds(env, acct));
 
   for (const game of games) {
@@ -494,7 +510,6 @@ export async function processUserWithGames(
     }
   }
 
-  // Clean up pins for games no longer in the user's follow window.
   for (const gid of existingGameIds) {
     if (!currentGameIds.has(gid)) {
       await deletePin(env, "sports-" + gid + "-pre", user.timelineToken, acct);
@@ -537,16 +552,11 @@ async function fetchUnionGames(users: UserEntry[]): Promise<Map<string, NHLGame>
   return gameMap;
 }
 
-// Skips ESPN polling during a quiet UTC window where North-American
-// pro sports are essentially never live. UTC 08:00–11:59 covers the
-// 4am–8am ET / 1am–5am PT dead zone where all leagues are off.
-// FIFA-WC matches outside this window are still covered.
 function isInCronWindowUTC(): boolean {
   const hour = new Date().getUTCHours();
   return hour < 8 || hour >= 12;
 }
 
-// Called every 2 minutes by the Cron Trigger (see wrangler.toml).
 export async function runScheduledTick(env: Env): Promise<void> {
   if (!isInCronWindowUTC()) {
     console.log("[timeline] outside UTC cron window (08:00–11:59 quiet) — skipping");
@@ -576,8 +586,6 @@ export async function runScheduledTick(env: Env): Promise<void> {
   }
 }
 
-// Called on registration to push an immediate update without waiting
-// for the next cron tick.
 export async function processUserImmediate(env: Env, acct: string): Promise<void> {
   try {
     await processUserWithGames(env, acct, null);

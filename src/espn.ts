@@ -8,6 +8,10 @@
 // - In-memory caches still work within a single Worker isolate; they
 //   simply don't survive across isolates, which is fine — the 60s
 //   TTL is short enough that occasional re-fetches don't matter.
+//
+// Fix (2026-05): Use Eastern Time (America/New_York) for the date
+// window calculation so games near midnight UTC don't land on the
+// wrong scoreboard day. ESPN's scoreboard endpoint uses ET dates.
 
 import type { GameState, NHLGame, NHLTeam, SportTeamInfo } from "./types";
 
@@ -26,6 +30,28 @@ const SPORT_BASES: Record<GenericSport, string> = {
   mlb: ESPN_MLB_BASE,
   nfl: ESPN_NFL_BASE,
 };
+
+// ---------- ET date helper ----------
+// Returns today's date string (YYYY-MM-DD) in America/New_York so that
+// our scoreboard window anchors to the same "day" ESPN uses, preventing
+// the 24-hour-off bug when the Worker runs near UTC midnight.
+function todayInET(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+// Add `days` calendar days to a YYYY-MM-DD string without relying on
+// local timezone arithmetic.
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}
 
 // ---------- Scoreboard cache (60s, in-memory, single-flight) ----------
 const SCOREBOARD_TTL_MS = 60_000;
@@ -291,15 +317,17 @@ export async function fetchFollowedTeamsGamesForSport(
 ): Promise<NHLGame[]> {
   if (!teamIds || teamIds.length === 0) return [];
 
-  const today = new Date();
+  // Anchor the window to Eastern Time so we request the same
+  // scoreboard dates ESPN uses (ET-based). Without this, a Worker
+  // running at e.g. 22:00 UTC would treat the day as "tomorrow"
+  // in ET, placing games a full day ahead on the timeline.
+  const etToday = todayInET();
   const games: NHLGame[] = [];
   const seenIds = new Set<string>();
   const followedFilter = buildLowerFilter(teamIds);
 
   for (let i = -1; i <= 7; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + i);
-    const dateStr = date.toISOString().split("T")[0];
+    const dateStr = addDays(etToday, i);
     const dayGames = await fetchScoreboardForSport(sport, dateStr);
     for (const game of dayGames) {
       const isFollowedTeam =
@@ -343,15 +371,13 @@ async function fetchFIFAWCScoreboardRaw(dateStr?: string): Promise<NHLGame[]> {
 export async function fetchFIFAWCFollowedCountriesGames(countryIds?: string[]): Promise<NHLGame[]> {
   if (!countryIds || countryIds.length === 0) return [];
   try {
-    const today = new Date();
+    const etToday = todayInET();
     const games: NHLGame[] = [];
     const seenIds = new Set<string>();
     const lowerFilter = buildLowerFilter(countryIds);
 
     for (let i = -3; i <= 14; i++) {
-      const date = new Date(today);
-      date.setDate(date.getDate() + i);
-      const dateStr = date.toISOString().split("T")[0];
+      const dateStr = addDays(etToday, i);
       const dayGames = await fetchFIFAWCScoreboardRaw(dateStr);
       for (const game of dayGames) {
         const isFollowed =
