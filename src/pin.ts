@@ -8,6 +8,12 @@
 // Fix (2026-05): buildSubtitle fallback time display now uses
 // America/New_York (ET) instead of UTC, so pre-game pins show the
 // correct local start time for North American sports.
+//
+// Fix (2026-05): duration=180 added to all pins so they stay in the
+// future timeline for 3 hours from kickoff, matching calendar event
+// behaviour. The -pre pin is no longer deleted when a game goes live;
+// instead the -live pin is pushed at the same startTime so the watch
+// sees an in-place update with no gap.
 
 import type { Env, GameState, NHLGame, NHLTeam, PinSnapshot, UserEntry } from "./types";
 import {
@@ -33,6 +39,11 @@ const FINAL_GRACE_MS = 5 * 60 * 1000;
 const SCHEDULED_PIN_WINDOW_MS = 48 * 60 * 60 * 1000;
 const REMINDER_BEFORE_MS = 15 * 60 * 1000;
 const STALE_FINAL_MS = 24 * 60 * 60 * 1000;
+
+// Duration in minutes added to every pin so PebbleOS keeps the pin in
+// the "future" (upcoming) view for the full likely game window.
+// 180 min = 3 hours, which safely covers any sport.
+const PIN_DURATION_MIN = 180;
 
 // ---------- Pin shape ----------
 
@@ -66,6 +77,7 @@ interface PinAction { type: string; title: string; launchCode?: number; }
 interface TimelinePin {
   id: string;
   time: string;
+  duration: number;
   layout: PinLayout;
   actions?: PinAction[];
   reminders?: PinReminder[];
@@ -238,6 +250,10 @@ export function buildPin(game: NHLGame, opts: PinOpts = {}): TimelinePin {
   const pin: TimelinePin = {
     id: "sports-" + game.gameId + (isScoreState ? "-live" : "-pre"),
     time: game.startTime,
+    // duration keeps the pin in the "future/upcoming" timeline view for
+    // the full game window, exactly like a calendar event. Without this,
+    // PebbleOS slides the pin to the past the instant startTime passes.
+    duration: PIN_DURATION_MIN,
     layout: {
       type: "sportsPin",
       title,
@@ -481,10 +497,10 @@ export async function processUserWithGames(
     const periodChanged = !!prev && prev.period !== game.period;
     const clockChanged = !!prev && prev.clock !== game.clock;
 
-    if (stateChanged && prev && prev.state === "pre-game" &&
-        (game.state === "in-game" || game.state === "final")) {
-      await deletePin(env, "sports-" + gid + "-pre", user.timelineToken, acct);
-    }
+    // Do NOT delete the -pre pin when a game goes live. The -live pin
+    // is pushed at the same startTime+duration so PebbleOS updates it
+    // in-place. Deleting causes a brief gap where the pin vanishes from
+    // the timeline, which is the bug users reported.
 
     if (isNew || scoreChanged || stateChanged || periodChanged || clockChanged) {
       const pin = buildPin(game, { isNew, scoreChanged, stateChanged, periodChanged });
