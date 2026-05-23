@@ -1,6 +1,6 @@
 var timeline = require('./timeline');
 
-var COMPANION_URL = 'https://REPLACE_WITH_YOUR_WORKER_URL.workers.dev';
+var COMPANION_URL = 'https://pebble-sports-worker.saintyoga.workers.dev';
 var POLL_INTERVAL_MS = 2 * 60 * 1000;
 
 var LS_FOLLOWED = 'sports_followed';
