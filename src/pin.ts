@@ -14,6 +14,8 @@
 // behaviour. The -pre pin is no longer deleted when a game goes live;
 // instead the -live pin is pushed at the same startTime so the watch
 // sees an in-place update with no gap.
+//
+// Fix (2026-05): removed UTC quiet window — cron now runs 24/7.
 
 import type { Env, GameState, NHLGame, NHLTeam, PinSnapshot, UserEntry } from "./types";
 import {
@@ -568,16 +570,9 @@ async function fetchUnionGames(users: UserEntry[]): Promise<Map<string, NHLGame>
   return gameMap;
 }
 
-function isInCronWindowUTC(): boolean {
-  const hour = new Date().getUTCHours();
-  return hour < 8 || hour >= 12;
-}
-
 export async function runScheduledTick(env: Env): Promise<void> {
-  if (!isInCronWindowUTC()) {
-    console.log("[timeline] outside UTC cron window (08:00–11:59 quiet) — skipping");
-    return;
-  }
+  // No quiet window — cron runs 24/7. Cloudflare free tier handles 720 req/day
+  // easily. Removing the window prevents evening/overnight games being missed.
   const accts = await listAccountTokens(env);
   if (accts.length === 0) {
     console.log("[timeline] no registered users — skipping tick");
