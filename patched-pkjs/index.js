@@ -287,10 +287,15 @@ function createSportsPin(game) {
   var pin = {
     id: 'sports-' + game.gameId + (isScoreState ? '-live' : '-pre'),
     time: game.startTime,
-    layout: layout
+    duration: 180,
+    layout: layout,
+    actions: [
+      { type: 'openWatchApp', title: 'Open Sports App', launchCode: 1 }
+    ]
   };
   if (isScoreState) {
     pin.updateNotification = {
+      time: new Date().toISOString(),
       layout: {
         type: 'genericNotification',
         title: title,
