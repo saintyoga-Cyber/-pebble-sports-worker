@@ -16,6 +16,9 @@
 // sees an in-place update with no gap.
 //
 // Fix (2026-05): removed UTC quiet window — cron now runs 24/7.
+//
+// Perf (2026-06): runScheduledTick now calls listActiveUsers() for
+// O(1) user hydration (1 KV read total) instead of N+1 reads.
 
 import type { Env, GameState, NHLGame, NHLTeam, PinSnapshot, UserEntry } from "./types";
 import {
@@ -26,7 +29,7 @@ import {
   deleteSnap,
   getSnap,
   getUser,
-  listAccountTokens,
+  listActiveUsers,
   listSnapGameIds,
   markTokenInvalid,
   putSnap,
@@ -159,9 +162,6 @@ function teamColor(t: NHLTeam, sport?: string): string {
   return map[abbr] || "white";
 }
 
-// Format the fallback "start time" text in Eastern Time so North
-// American sports fans see the correct local hour (e.g. "6:10 PM")
-// regardless of where the Cloudflare Worker is running.
 function formatStartTimeET(isoString: string, broadcast?: string | null): string {
   const d = new Date(isoString);
   if (isNaN(d.getTime())) return "";
@@ -198,9 +198,6 @@ function buildSubtitle(game: NHLGame): string {
         if (h > 0) return m > 0 ? `Starts in ${h}h ${m}m` : `Starts in ${h}h`;
         return `Starts in ${m}m`;
       }
-      // Fallback: game time has passed (e.g. pin was created early).
-      // Display start time in ET — not UTC — so North American fans
-      // see the correct hour (fixes the reported timezone bug).
       return formatStartTimeET(game.startTime, game.broadcast);
     }
     case "in-game": {
@@ -252,9 +249,6 @@ export function buildPin(game: NHLGame, opts: PinOpts = {}): TimelinePin {
   const pin: TimelinePin = {
     id: "sports-" + game.gameId + (isScoreState ? "-live" : "-pre"),
     time: game.startTime,
-    // duration keeps the pin in the "future/upcoming" timeline view for
-    // the full game window, exactly like a calendar event. Without this,
-    // PebbleOS slides the pin to the past the instant startTime passes.
     duration: PIN_DURATION_MIN,
     layout: {
       type: "sportsPin",
@@ -433,7 +427,8 @@ function userFollowsGame(user: UserEntry, game: NHLGame): boolean {
 // ---------- Per-user processing ----------
 
 async function fetchUserGames(user: UserEntry): Promise<NHLGame[]> {
-  const all: NHLGame[] = [];\n  for (const [sport, ids] of Object.entries(user.followed)) {
+  const all: NHLGame[] = [];
+  for (const [sport, ids] of Object.entries(user.followed)) {
     if (!ids?.length) continue;
     try {
       const games =
@@ -448,9 +443,9 @@ async function fetchUserGames(user: UserEntry): Promise<NHLGame[]> {
   return all;
 }
 
-// cachedUser is supplied by runScheduledTick (which already fetched the
-// UserEntry to build the union). When present it avoids a redundant KV
-// read. processUserImmediate passes no cachedUser so the fallback
+// cachedUser is supplied by runScheduledTick (which already has the
+// UserEntry from listActiveUsers). When present it avoids a redundant
+// KV read. processUserImmediate passes no cachedUser so the fallback
 // getUser() still fires there, preserving that path unchanged.
 export async function processUserWithGames(
   env: Env,
@@ -503,11 +498,6 @@ export async function processUserWithGames(
     const periodChanged = !!prev && prev.period !== game.period;
     const clockChanged = !!prev && prev.clock !== game.clock;
 
-    // Do NOT delete the -pre pin when a game goes live. The -live pin
-    // is pushed at the same startTime+duration so PebbleOS updates it
-    // in-place. Deleting causes a brief gap where the pin vanishes from
-    // the timeline, which is the bug users reported.
-
     if (isNew || scoreChanged || stateChanged || periodChanged || clockChanged) {
       const pin = buildPin(game, { isNew, scoreChanged, stateChanged, periodChanged });
       if (await putPin(env, pin, user.timelineToken, acct)) {
@@ -546,7 +536,6 @@ export async function processUserWithGames(
 function computeUnionTeamsForUsers(users: UserEntry[]): Record<string, Set<string>> {
   const union: Record<string, Set<string>> = {};
   for (const user of users) {
-    if (user.tokenInvalid) continue;
     for (const [sport, ids] of Object.entries(user.followed)) {
       if (!union[sport]) union[sport] = new Set();
       for (const id of ids) union[sport].add(id);
@@ -575,18 +564,12 @@ async function fetchUnionGames(users: UserEntry[]): Promise<Map<string, NHLGame>
 }
 
 export async function runScheduledTick(env: Env): Promise<void> {
-  // No quiet window — cron runs 24/7. Cloudflare free tier handles 720 req/day
-  // easily. Removing the window prevents evening/overnight games being missed.
-  const accts = await listAccountTokens(env);
-  if (accts.length === 0) {
+  // listActiveUsers() costs exactly 1 KV read regardless of user count.
+  // It replaces the previous listAccountTokens() + N×getUser() pattern.
+  const users = await listActiveUsers(env);
+  if (users.length === 0) {
     console.log("[timeline] no registered users — skipping tick");
     return;
-  }
-
-  const users: UserEntry[] = [];
-  for (const acct of accts) {
-    const u = await getUser(env, acct);
-    if (u) users.push(u);
   }
 
   const allGames = await fetchUnionGames(users);
@@ -595,7 +578,7 @@ export async function runScheduledTick(env: Env): Promise<void> {
   for (const user of users) {
     try {
       // Pass the already-fetched user object to avoid a redundant KV read
-      // inside processUserWithGames (Commit 2 — double-fetch elimination).
+      // inside processUserWithGames.
       await processUserWithGames(env, user.accountToken, allGames, user);
     } catch (err) {
       console.error("[timeline] tick error:", err);
