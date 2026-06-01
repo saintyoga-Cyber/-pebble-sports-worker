@@ -46,6 +46,7 @@ export interface SportTeamInfo {
 
 // Registry entry stored in KV under key `user:<accountToken>`.
 export interface UserEntry {
+  accountToken: string;
   timelineToken: string;
   followed: Record<string, string[]>;
   lastSeenAt: string;
