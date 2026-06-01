@@ -433,8 +433,7 @@ function userFollowsGame(user: UserEntry, game: NHLGame): boolean {
 // ---------- Per-user processing ----------
 
 async function fetchUserGames(user: UserEntry): Promise<NHLGame[]> {
-  const all: NHLGame[] = [];
-  for (const [sport, ids] of Object.entries(user.followed)) {
+  const all: NHLGame[] = [];\n  for (const [sport, ids] of Object.entries(user.followed)) {
     if (!ids?.length) continue;
     try {
       const games =
@@ -449,12 +448,17 @@ async function fetchUserGames(user: UserEntry): Promise<NHLGame[]> {
   return all;
 }
 
+// cachedUser is supplied by runScheduledTick (which already fetched the
+// UserEntry to build the union). When present it avoids a redundant KV
+// read. processUserImmediate passes no cachedUser so the fallback
+// getUser() still fires there, preserving that path unchanged.
 export async function processUserWithGames(
   env: Env,
   acct: string,
   allGames: Map<string, NHLGame> | null,
+  cachedUser?: UserEntry,
 ): Promise<void> {
-  const user = await getUser(env, acct);
+  const user = cachedUser ?? await getUser(env, acct);
   if (!user) return;
   if (user.tokenInvalid) return;
 
@@ -590,7 +594,9 @@ export async function runScheduledTick(env: Env): Promise<void> {
 
   for (const user of users) {
     try {
-      await processUserWithGames(env, user.accountToken, allGames);
+      // Pass the already-fetched user object to avoid a redundant KV read
+      // inside processUserWithGames (Commit 2 — double-fetch elimination).
+      await processUserWithGames(env, user.accountToken, allGames, user);
     } catch (err) {
       console.error("[timeline] tick error:", err);
     }
