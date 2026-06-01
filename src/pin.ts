@@ -43,7 +43,7 @@ const REMINDER_BEFORE_MS = 15 * 60 * 1000;
 const STALE_FINAL_MS = 24 * 60 * 60 * 1000;
 
 // Duration in minutes added to every pin so PebbleOS keeps the pin in
-// the "future" (upcoming) view for the full likely game window.
+// the "future" (upcoming) view for the full game window.
 // 180 min = 3 hours, which safely covers any sport.
 const PIN_DURATION_MIN = 180;
 
@@ -586,11 +586,11 @@ export async function runScheduledTick(env: Env): Promise<void> {
   }
 
   const allGames = await fetchUnionGames(users);
-  console.log(`[timeline] tick — users=${accts.length} games=${allGames.size}`);
+  console.log(`[timeline] tick — users=${users.length} games=${allGames.size}`);
 
-  for (const acct of accts) {
+  for (const user of users) {
     try {
-      await processUserWithGames(env, acct, allGames);
+      await processUserWithGames(env, user.accountToken, allGames);
     } catch (err) {
       console.error("[timeline] tick error:", err);
     }
