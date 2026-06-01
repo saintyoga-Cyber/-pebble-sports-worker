@@ -10,7 +10,7 @@ import {
   getSportTeams,
   isSupportedTeamsSport,
 } from "./espn";
-import { putUser, validateFollowed } from "./registry";
+import { listActiveUsers, putUser, validateFollowed } from "./registry";
 import { processUserImmediate } from "./pin";
 import { renderSettingsPage } from "./settings-page";
 
@@ -48,6 +48,40 @@ function handleOptions(): Response {
 
 async function handleSettingsPage(): Promise<Response> {
   return html(renderSettingsPage());
+}
+
+// /health — live operational status.
+//
+// Probes KV by calling listActiveUsers() (1 KV read, same cost as one
+// cron tick). Returns user counts and a live timestamp so the caller
+// can distinguish a cached 200 from a genuinely healthy worker.
+async function handleHealth(env: Env): Promise<Response> {
+  let kvStatus = "ok";
+  let total = 0;
+  let active = 0;
+
+  try {
+    const users = await listActiveUsers(env);
+    // listActiveUsers filters out tokenInvalid entries; we need the raw
+    // index to compute total. Re-derive total from the env directly.
+    // To avoid a second read, count active from listActiveUsers result
+    // and read the raw index once.
+    const raw = await env.SPORTS_KV.get("index:users");
+    const parsed: unknown[] = raw ? JSON.parse(raw) : [];
+    total = Array.isArray(parsed) ? parsed.length : 0;
+    active = users.length;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    kvStatus = `error: ${msg}`;
+  }
+
+  return json({
+    ok: kvStatus === "ok",
+    service: "pebble-sports-worker",
+    kv: kvStatus,
+    users: { total, active },
+    ts: new Date().toISOString(),
+  }, kvStatus === "ok" ? 200 : 503);
 }
 
 async function handleSportsTeams(url: URL): Promise<Response> {
@@ -180,9 +214,9 @@ export async function handleHTTP(request: Request, env: Env, ctx: ExecutionConte
     return handleSportsRegister(request, env, ctx);
   }
 
-  // Health check for monitoring and quick deploy verification.
+  // Health check — now returns live KV + user status (P2).
   if (pathname === "/" || pathname === "/health") {
-    return json({ ok: true, service: "pebble-sports-worker" });
+    return handleHealth(env);
   }
 
   return notFound();
