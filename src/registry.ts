@@ -34,13 +34,16 @@ export async function getUser(env: Env, accountToken: string): Promise<UserEntry
   const raw = await env.SPORTS_KV.get(`user:${accountToken}`);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as UserEntry;
+    const entry = JSON.parse(raw) as UserEntry;
+    entry.accountToken = accountToken;
+    return entry;
   } catch {
     return null;
   }
 }
 
 export async function putUser(env: Env, accountToken: string, entry: UserEntry): Promise<void> {
+  entry.accountToken = accountToken;
   await env.SPORTS_KV.put(`user:${accountToken}`, JSON.stringify(entry));
   await ensureInIndex(env, accountToken);
 }
