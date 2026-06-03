@@ -11,14 +11,17 @@
 //
 // Fix (2026-05): duration=180 added to all pins so they stay in the
 // future timeline for 3 hours from kickoff, matching calendar event
-// behaviour. The -pre pin is no longer deleted when a game goes live;
-// instead the -live pin is pushed at the same startTime so the watch
-// sees an in-place update with no gap.
+// behaviour.
 //
 // Fix (2026-05): removed UTC quiet window — cron now runs 24/7.
 //
 // Perf (2026-06): runScheduledTick now calls listActiveUsers() for
 // O(1) user hydration (1 KV read total) instead of N+1 reads.
+//
+// Fix (2026-06): single stable pin ID "sports-{gameId}" for all game
+// states. Previously "-pre" and "-live" suffixes caused two separate
+// pins to appear on the watch for the same game when state changed.
+// Rebble PUT is idempotent: pushing the same ID updates in-place.
 
 import type { Env, GameState, NHLGame, NHLTeam, PinSnapshot, UserEntry } from "./types";
 import {
@@ -246,8 +249,12 @@ export function buildPin(game: NHLGame, opts: PinOpts = {}): TimelinePin {
     ? [String(game.awayScore), String(game.homeScore)]
     : [recordAway || "—", recordHome || "—"];
 
+  // Single stable ID per game — no -pre/-live suffix.
+  // Rebble PUT is idempotent: pushing the same ID with updated data
+  // performs an in-place update, so the pre-game pin is cleanly
+  // replaced by the live pin without a duplicate appearing on the watch.
   const pin: TimelinePin = {
-    id: "sports-" + game.gameId + (isScoreState ? "-live" : "-pre"),
+    id: "sports-" + game.gameId,
     time: game.startTime,
     duration: PIN_DURATION_MIN,
     layout: {
@@ -522,10 +529,11 @@ export async function processUserWithGames(
     }
   }
 
+  // Orphan cleanup: games that have disappeared from the current feed.
+  // Single deletePin call per game — stable ID has no suffix.
   for (const gid of existingGameIds) {
     if (!currentGameIds.has(gid)) {
-      await deletePin(env, "sports-" + gid + "-pre", user.timelineToken, acct);
-      await deletePin(env, "sports-" + gid + "-live", user.timelineToken, acct);
+      await deletePin(env, "sports-" + gid, user.timelineToken, acct);
       await deleteSnap(env, acct, gid);
     }
   }
