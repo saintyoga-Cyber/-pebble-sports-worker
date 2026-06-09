@@ -138,6 +138,20 @@ async function handleSportsFIFAGames(url: URL): Promise<Response> {
   }
 }
 
+// Placeholder values Rebble returns when the companion session has not
+// yet completed its token exchange. These arrive via getTimelineToken()
+// success callback — a falsy check alone does not catch them.
+// Fix 1 (pkjs retry loop) prevents these from ever being sent, but
+// this guard is a defence-in-depth safety net at the KV write boundary.
+const DUMMY_TIMELINE_TOKENS = new Set([
+  "emulated-dummy-token",
+  "emulated-user-token",
+]);
+
+function isDummyTimelineToken(token: string): boolean {
+  return DUMMY_TIMELINE_TOKENS.has(token) || token.startsWith("emulated-");
+}
+
 interface RegisterRequest {
   accountToken?: unknown;
   timelineToken?: unknown;
@@ -160,6 +174,17 @@ async function handleSportsRegister(request: Request, env: Env, ctx: ExecutionCo
   if (!timelineToken || typeof timelineToken !== "string") {
     return json({ error: "timelineToken is required" }, 400);
   }
+
+  // Reject placeholder tokens — writing these to KV would poison the
+  // registry and cause all subsequent background cron pushes to fail
+  // with Rebble 401/403. pkjs Fix 1 prevents these from being sent in
+  // the first place; this is the last-resort KV write guard.
+  if (isDummyTimelineToken(timelineToken)) {
+    const tag = typeof accountToken === "string" ? accountToken.substring(0, 8) : "unknown";
+    console.warn(`[register] rejected dummy timeline token for acct=${tag}…`);
+    return json({ error: "timeline token not yet available — please try again" }, 400);
+  }
+
   if (!followed || typeof followed !== "object" || Array.isArray(followed)) {
     return json({ error: "followed map is required" }, 400);
   }
