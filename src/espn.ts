@@ -16,7 +16,11 @@
 import type { GameState, NHLGame, NHLTeam, SportTeamInfo } from "./types";
 
 const ESPN_NHL_BASE = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl";
-const ESPN_SOCCER_FIFA_WC_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/FIFA.WC";
+// ESPN's league code for the FIFA World Cup is "fifa.world" (same slug
+// the teams endpoint below already uses). The old "FIFA.WC" slug gets a
+// 400/404, which fetchFIFAWCScoreboardRaw treats as "no games" —
+// silently emptying every FIFA snapshot.
+const ESPN_SOCCER_FIFA_WC_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world";
 const ESPN_NBA_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba";
 const ESPN_MLB_BASE = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb";
 const ESPN_NFL_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl";
